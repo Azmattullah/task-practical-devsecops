@@ -28,3 +28,6 @@ ansible.log
 
 # Docker
 .env
+
+
+/Extra
