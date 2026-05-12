@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    networks:
+      - app-network
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+    environment:
+      SERVICE_NAME: nginx
+    ports:
+      - "80:80"
+
+  test-client:
+    image: alpine/curl
+    command: tail -f /dev/null
+    networks:
+      - app-network
+    deploy:
+      placement:
+        constraints:
+          - node.role == worker
+
+networks:
+  app-network:
+    external: true

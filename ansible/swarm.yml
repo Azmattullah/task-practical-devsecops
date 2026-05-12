@@ -1,0 +1,43 @@
+---
+- name: Initialize Docker Swarm
+  hosts: managers
+  become: true
+  tasks:
+    - name: Check if Swarm is already active
+      command: docker info --format "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"
+      register: swarm_state
+      changed_when: false
+
+    - name: Initialize Swarm on manager
+      command: docker swarm init --advertise-addr {{ ansible_facts['default_ipv4']['address'] }}
+      when: swarm_state.stdout != 'active'
+
+    - name: Get worker join token
+      command: docker swarm join-token -q worker
+      register: worker_token
+      changed_when: false
+
+    - name: Check if overlay network exists
+      command: docker network ls --filter name=app-network -q
+      register: overlay_network
+      changed_when: false
+
+    - name: Create app-network overlay network
+      command: docker network create --driver overlay --subnet 10.10.10.0/24 --opt com.docker.network.driver.mtu=1410 app-network
+      when: overlay_network.stdout == ""
+
+- name: Join Docker Swarm as Worker
+  hosts: workers
+  become: true
+  tasks:
+    - name: Check if Swarm is already active
+      command: docker info --format "{{ '{{' }}.Swarm.LocalNodeState{{ '}}' }}"
+      register: worker_swarm_state
+      changed_when: false
+
+    - name: Join Swarm as worker
+      command: >
+        docker swarm join 
+        --token {{ hostvars[groups['managers'][0]]['worker_token']['stdout'] }} 
+        {{ hostvars[groups['managers'][0]]['ansible_facts']['default_ipv4']['address'] }}:2377
+      when: worker_swarm_state.stdout != 'active'

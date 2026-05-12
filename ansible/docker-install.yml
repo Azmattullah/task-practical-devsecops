@@ -1,0 +1,132 @@
+---
+- name: Install and Secure Docker
+  hosts: all
+  become: true
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install dependencies
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker repository
+      apt_repository:
+        # repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_facts['distribution_release'] }} stable"
+        state: present
+
+    - name: Install Docker Engine
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: yes
+
+    - name: Create certs directory
+      file:
+        path: /etc/docker/certs
+        state: directory
+        mode: '0700'
+
+    - name: Generate CA Private Key
+      command: openssl genrsa -out /etc/docker/certs/ca-key.pem 4096
+      args:
+        creates: /etc/docker/certs/ca-key.pem
+
+    - name: Generate CA Certificate
+      command: openssl req -new -x509 -days 365 -key /etc/docker/certs/ca-key.pem -sha256 -out /etc/docker/certs/ca.pem -subj "/CN=Docker-CA"
+      args:
+        creates: /etc/docker/certs/ca.pem
+
+    - name: Generate Server Private Key
+      command: openssl genrsa -out /etc/docker/certs/server-key.pem 4096
+      args:
+        creates: /etc/docker/certs/server-key.pem
+
+    - name: Generate Server CSR
+      command: openssl req -subj "/CN=docker-server" -sha256 -new -key /etc/docker/certs/server-key.pem -out /etc/docker/certs/server.csr
+      args:
+        creates: /etc/docker/certs/server.csr
+
+    - name: Create extfile.cnf
+      copy:
+        dest: /etc/docker/certs/extfile.cnf
+        content: |
+          subjectAltName = IP:{{ ansible_host }},IP:127.0.0.1
+          extendedKeyUsage = serverAuth
+
+    - name: Sign Server Certificate
+      command: openssl x509 -req -days 365 -sha256 -in /etc/docker/certs/server.csr -CA /etc/docker/certs/ca.pem -CAkey /etc/docker/certs/ca-key.pem -CAcreateserial -out /etc/docker/certs/server-cert.pem -extfile /etc/docker/certs/extfile.cnf
+      args:
+        creates: /etc/docker/certs/server-cert.pem
+
+    - name: Set permissions on keys
+      file:
+        path: "{{ item }}"
+        mode: '0400'
+      loop:
+        - /etc/docker/certs/ca-key.pem
+        - /etc/docker/certs/server-key.pem
+
+    - name: Set permissions on certs
+      file:
+        path: "{{ item }}"
+        mode: '0444'
+      loop:
+        - /etc/docker/certs/ca.pem
+        - /etc/docker/certs/server-cert.pem
+
+    - name: Create systemd override directory for docker
+      file:
+        path: /etc/systemd/system/docker.service.d
+        state: directory
+
+    - name: Configure systemd override to allow daemon.json to control hosts
+      copy:
+        dest: /etc/systemd/system/docker.service.d/override.conf
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/usr/bin/dockerd
+      notify: Reload systemd
+
+    - name: Configure Docker daemon.json for TLS
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "tlsverify": true,
+            "tlscacert": "/etc/docker/certs/ca.pem",
+            "tlscert": "/etc/docker/certs/server-cert.pem",
+            "tlskey": "/etc/docker/certs/server-key.pem",
+            "hosts": ["tcp://0.0.0.0:2376", "unix:///var/run/docker.sock"],
+            "dns": ["{{ ansible_facts['default_ipv4']['address'] }}"],
+            "mtu": 1460
+          }
+      notify: Restart Docker
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Restart Docker
+      service:
+        name: docker
+        state: restarted

@@ -1,0 +1,49 @@
+---
+- name: Deploy Consul
+  hosts: all
+  become: true
+  tasks:
+    - name: Create Consul config directory
+      file:
+        path: /etc/consul.d
+        state: directory
+        mode: '0755'
+      when: inventory_hostname in groups['managers']
+
+    - name: Create Nginx service registration
+      copy:
+        dest: /etc/consul.d/nginx.json
+        content: |
+          {
+            "service": {
+              "name": "nginx",
+              "port": 80
+            }
+          }
+      when: inventory_hostname in groups['managers']
+
+    - name: Check if Consul is running
+      command: docker ps -q -f name=consul
+      register: consul_running
+      changed_when: false
+
+    - name: Start Consul Server (Manager)
+      command: >
+        docker run -d --name consul --restart always
+        -v /etc/consul.d:/consul/config
+        -p 8300:8300 -p 8301:8301 -p 8301:8301/udp -p 8302:8302 -p 8302:8302/udp
+        -p 8500:8500 -p {{ ansible_facts['default_ipv4']['address'] }}:53:8600/tcp -p {{ ansible_facts['default_ipv4']['address'] }}:53:8600/udp
+        hashicorp/consul:latest agent -server -ui -node={{ inventory_hostname | replace('_', '-') }} -bootstrap-expect=1
+        -client=0.0.0.0 -bind=0.0.0.0 -advertise={{ ansible_facts['default_ipv4']['address'] }}
+        -recursor=8.8.8.8 -config-dir=/consul/config
+      when: inventory_hostname in groups['managers'] and consul_running.stdout == ""
+
+    - name: Start Consul Agent (Worker)
+      command: >
+        docker run -d --name consul --restart always
+        -p 8300:8300 -p 8301:8301 -p 8301:8301/udp -p 8302:8302 -p 8302:8302/udp
+        -p 8500:8500 -p {{ ansible_facts['default_ipv4']['address'] }}:53:8600/tcp -p {{ ansible_facts['default_ipv4']['address'] }}:53:8600/udp
+        hashicorp/consul:latest agent -node={{ inventory_hostname | replace('_', '-') }}
+        -client=0.0.0.0 -bind=0.0.0.0 -advertise={{ ansible_facts['default_ipv4']['address'] }}
+        -recursor=8.8.8.8 -retry-join={{ hostvars[groups['managers'][0]]['ansible_facts']['default_ipv4']['address'] }}
+      when: inventory_hostname in groups['workers'] and consul_running.stdout == ""

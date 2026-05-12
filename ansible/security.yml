@@ -1,0 +1,54 @@
+---
+- name: Apply Security Hardening
+  hosts: all
+  become: true
+  tasks:
+    - name: Ensure SSH key authentication is used (disable password auth)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PasswordAuthentication"
+        line: "PasswordAuthentication no"
+        state: present
+      notify: Restart SSH
+
+    - name: Disable root login via SSH
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?PermitRootLogin"
+        line: "PermitRootLogin no"
+        state: present
+      notify: Restart SSH
+
+    - name: Ensure UFW is installed
+      apt:
+        name: ufw
+        state: present
+        update_cache: yes
+
+    - name: Allow SSH globally
+      ufw:
+        rule: allow
+        port: '22'
+        proto: tcp
+
+    - name: Allow Docker TLS API globally
+      ufw:
+        rule: allow
+        port: '2376'
+        proto: tcp
+
+    - name: Allow all internal traffic on subnet for Swarm and Consul
+      ufw:
+        rule: allow
+        src: '10.0.1.0/24'
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        policy: deny
+
+  handlers:
+    - name: Restart SSH
+      service:
+        name: sshd
+        state: restarted
